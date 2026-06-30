@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>!數獨!</title>
+<style>
+  body {
+    margin: 20px;
+    font-family: Arial, sans-serif;
+  }
+  #app {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    align-items: flex-start;
+  }
+  #button-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #button-panel button {
+    padding: 8px 12px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  #sudoku-container {
+    width: 360px;
+    height: 360px;
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    grid-template-rows: repeat(9, 1fr);
+    gap: 1px;
+    border: 2px solid #333;
+    background-color: #999;
+    box-sizing: border-box;
+  }
+  #sudoku-container > div {
+    width: 100%;
+    height: 100%;
+    background-color: white;
+    border: 1px solid #999;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    font-size: 20px;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    box-sizing: border-box;
+  }
+  #sudoku-container > div.fixed {
+    background-color: #eee;
+    cursor: default;
+  }
+  #sudoku-container > div input {
+    width: 100%;
+    height: 100%;
+    border: none;
+    font-weight: bold;
+    font-size: 20px;
+    text-align: center;
+    outline: none;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    background: transparent;
+  }
+  .highlight { background-color: #ffffa0 !important; }
+  .related { background-color: #d0e9ff !important; }
+  .error { background-color: #ffb3b3 !important; }
+
+  #sudoku-container div[data-row="2"],
+  #sudoku-container div[data-row="5"] {
+    border-bottom: 2px solid #333;
+  }
+  #sudoku-container div[data-col="2"],
+  #sudoku-container div[data-col="5"] {
+    border-right: 2px solid #333;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="button-panel">
+    <button onclick="undoStep()">上一步</button>
+    <button onclick="generateNewPuzzle()">產生新題目</button>
+    <button onclick="checkSolution()">檢查解答</button>
+    <button onclick="resetBoard()">重置</button>
+  </div>
+  <div id="sudoku-container"></div>
+</div>
+
+<script>
+let initialBoard = Array.from({ length: 9 }, () => Array(9).fill(''));
+let history = [];
+
+function createBoard() {
+  const container = document.getElementById('sudoku-container');
+  container.innerHTML = '';
+
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const val = initialBoard[r][c];
+      const cell = document.createElement('div');
+      cell.dataset.row = r;
+      cell.dataset.col = c;
+
+      if (val !== '') {
+        cell.textContent = val;
+        cell.classList.add('fixed');
+        cell.addEventListener('click', () => handleHighlightFixed(val, r, c));
+      } else {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.maxLength = 1;
+        input.dataset.row = r;
+        input.dataset.col = c;
+        input.addEventListener('input', (e) => {
+          e.target.value = e.target.value.replace(/[^1-9]/g, '');
+          handleHighlight(e.target.value, r, c);
+          checkConflicts();
+          saveHistory();
+        });
+        input.addEventListener('focus', () => {
+          handleHighlight(input.value, r, c);
+        });
+        cell.appendChild(input);
+      }
+      container.appendChild(cell);
+    }
+  }
+  clearErrors();
+  clearHighlights();
+}
+
+function handleHighlight(value, row, col) {
+  clearHighlights();
+  if (!value || !/^[1-9]$/.test(value)) return;
+  highlightSameNumber(value);
+  highlightRelatedCells(row, col);
+}
+function handleHighlightFixed(value, row, col) {
+  clearHighlights();
+  highlightSameNumber(value);
+  highlightRelatedCells(row, col);
+}
+function highlightSameNumber(value) {
+  document.querySelectorAll('#sudoku-container div').forEach(cell => {
+    if (cell.classList.contains('fixed') && cell.textContent === value) {
+      cell.classList.add('highlight');
+    } else {
+      const input = cell.querySelector('input');
+      if (input && input.value === value) {
+        cell.classList.add('highlight');
+      }
+    }
+  });
+}
+function highlightRelatedCells(row, col) {
+  document.querySelectorAll('#sudoku-container div').forEach(cell => {
+    const r = parseInt(cell.dataset.row);
+    const c = parseInt(cell.dataset.col);
+    if (r === row || c === col || sameBox(r, c, row, col)) {
+      cell.classList.add('related');
+    }
+  });
+}
+function sameBox(r1, c1, r2, c2) {
+  return Math.floor(r1 / 3) === Math.floor(r2 / 3) &&
+         Math.floor(c1 / 3) === Math.floor(c2 / 3);
+}
+function clearHighlights() {
+  document.querySelectorAll('.highlight, .related').forEach(cell => {
+    cell.classList.remove('highlight', 'related');
+  });
+}
+
+function checkConflicts() {
+  clearErrors();
+
+  const board = [];
+  for (let r = 0; r < 9; r++) {
+    board[r] = [];
+    for (let c = 0; c < 9; c++) {
+      const cell = document.querySelector(`div[data-row="${r}"][data-col="${c}"]`);
+      let val = '';
+      if (cell.classList.contains('fixed')) {
+        val = cell.textContent;
+      } else {
+        const input = cell.querySelector('input');
+        if (input) val = input.value;
+      }
+      board[r][c] = val;
+    }
+  }
+
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const val = board[r][c];
+      if (!val || !/^[1-9]$/.test(val)) continue;
+
+      const conflicts = [];
+
+      for (let col = 0; col < 9; col++) {
+        if (col !== c && board[r][col] === val) conflicts.push([r, col]);
+      }
+      for (let row = 0; row < 9; row++) {
+        if (row !== r && board[row][c] === val) conflicts.push([row, c]);
+      }
+      const startRow = Math.floor(r / 3) * 3;
+      const startCol = Math.floor(c / 3) * 3;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const rr = startRow + i;
+          const cc = startCol + j;
+          if ((rr !== r || cc !== c) && board[rr][cc] === val) conflicts.push([rr, cc]);
+        }
+      }
+
+      if (conflicts.length > 0) {
+        markError(r, c);
+        conflicts.forEach(([rr, cc]) => markError(rr, cc));
+      }
+    }
+  }
+}
+function markError(r, c) {
+  const cell = document.querySelector(`div[data-row="${r}"][data-col="${c}"]`);
+  if (cell) cell.classList.add('error');
+}
+function clearErrors() {
+  document.querySelectorAll('.error').forEach(cell => cell.classList.remove('error'));
+}
+
+function resetBoard() {
+
+  localStorage.removeItem('sudoku-progress');
+  localStorage.removeItem('sudoku-initialBoard');
+
+  createBoard();
+  clearErrors();
+  clearHighlights();
+  history = [];
+  saveHistory();
+}
+
+function checkSolution() {
+  checkConflicts();
+
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const cell = document.querySelector(`div[data-row="${r}"][data-col="${c}"]`);
+      let val = '';
+      if (cell.classList.contains('fixed')) val = cell.textContent;
+      else {
+        const input = cell.querySelector('input');
+        val = input ? input.value : '';
+      }
+      if (!val || !/^[1-9]$/.test(val)) {
+        alert('尚有空格或輸入錯誤');
+        return;
+      }
+    }
+  }
+
+  if (document.querySelectorAll('.error').length > 0) {
+    alert('解答有錯誤，請修正！');
+    return;
+  }
+
+  alert('恭喜！解答正確！');
+}
+
+function generateFullSudoku() {
+  const board = Array.from({ length: 9 }, () => Array(9).fill(0));
+
+  function shuffleArray(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+
+  function isSafe(row, col, num) {
+    for (let x = 0; x < 9; x++) {
+      if (board[row][x] === num) return false;
+      if (board[x][col] === num) return false;
+    }
+    const startRow = Math.floor(row / 3) * 3;
+    const startCol = Math.floor(col / 3) * 3;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (board[startRow + i][startCol + j] === num) return false;
+      }
+    }
+    return true;
+  }
+
+  function fillBoard(cell = 0) {
+    if (cell >= 81) return true;
+    const row = Math.floor(cell / 9);
+    const col = cell % 9;
+    if (board[row][col] !== 0) return fillBoard(cell + 1);
+    const numbers = [1,2,3,4,5,6,7,8,9];
+    shuffleArray(numbers);
+    for (const num of numbers) {
+      if (isSafe(row, col, num)) {
+        board[row][col] = num;
+        if (fillBoard(cell + 1)) return true;
+        board[row][col] = 0;
+      }
+    }
+    return false;
+  }
+  fillBoard();
+  return board;
+}
+
+function removeNumbersFromBoard(board, holes = 40) {
+  const puzzle = board.map(row => row.slice());
+  let count = holes;
+  while (count > 0) {
+    const r = Math.floor(Math.random() * 9);
+    const c = Math.floor(Math.random() * 9);
+    if (puzzle[r][c] !== 0) {
+      puzzle[r][c] = 0;
+      count--;
+    }
+  }
+  return puzzle;
+}
+
+function generateNewPuzzle() {
+  clearErrors();
+  clearHighlights();
+  history = [];
+  const fullBoard = generateFullSudoku();
+  const puzzle = removeNumbersFromBoard(fullBoard, 40);
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      initialBoard[r][c] = puzzle[r][c] === 0 ? '' : puzzle[r][c];
+    }
+  }
+  createBoard();
+  saveHistory();
+}
+
+function saveHistory() {
+  const snapshot = [];
+  for (let r = 0; r < 9; r++) {
+    snapshot[r] = [];
+    for (let c = 0; c < 9; c++) {
+      const cell = document.querySelector(`div[data-row="${r}"][data-col="${c}"]`);
+      if (cell.classList.contains('fixed')) {
+        snapshot[r][c] = cell.textContent;
+      } else {
+        const input = cell.querySelector('input');
+        snapshot[r][c] = input ? input.value : '';
+      }
+    }
+  }
+  history.push(snapshot);
+  if (history.length > 50) history.shift();
+
+  try {
+    localStorage.setItem('sudoku-progress', JSON.stringify(snapshot));
+    localStorage.setItem('sudoku-initialBoard', JSON.stringify(initialBoard));
+  } catch(e) {
+    console.warn('無法存儲遊戲進度', e);
+  }
+}
+
+function loadProgress() {
+  try {
+    const savedBoard = JSON.parse(localStorage.getItem('sudoku-progress'));
+    const savedInitial = JSON.parse(localStorage.getItem('sudoku-initialBoard'));
+    if (savedBoard && savedInitial) {
+      initialBoard = savedInitial;
+      createBoard();
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const cell = document.querySelector(`div[data-row="${r}"][data-col="${c}"]`);
+          if (!cell.classList.contains('fixed')) {
+            const input = cell.querySelector('input');
+            if (input) input.value = savedBoard[r][c];
+          }
+        }
+      }
+      saveHistory(); 
+      return true;
+    }
+  } catch(e) {
+    console.warn('讀取存檔失敗', e);
+  }
+  return false;
+}
+
+function undoStep() {
+  if (history.length <= 1) {
+    alert('已到最早狀態');
+    return;
+  }
+  history.pop(); 
+  const lastState = history[history.length - 1];
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const cell = document.querySelector(`div[data-row="${r}"][data-col="${c}"]`);
+      if (!cell.classList.contains('fixed')) {
+        const input = cell.querySelector('input');
+        if (input) {
+          input.value = lastState[r][c];
+        }
+      }
+    }
+  }
+  clearErrors();
+  clearHighlights();
+
+  try {
+    localStorage.setItem('sudoku-progress', JSON.stringify(lastState));
+  } catch(e) {
+    console.warn('無法更新存檔', e);
+  }
+}
+
+window.onload = () => {
+  if (!loadProgress()) {
+    generateNewPuzzle();
+  }
+};
+
+</script>
+
+</body>
+</html>
